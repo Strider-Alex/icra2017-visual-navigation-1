@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 import numpy as np
 
 # Actor-Critic Network Base Class
@@ -215,6 +216,114 @@ class ActorCriticFFNetwork(ActorCriticNetwork):
   def run_value(self, sess, state, target, scopes):
     k = self._get_key(scopes[:2])
     v_out = sess.run( self.v[k], feed_dict = {self.s : [state], self.t: [target]} )
+    return v_out[0]
+
+  def get_vars(self):
+    var_list = [
+      self.W_fc1, self.b_fc1,
+      self.W_fc2, self.b_fc2,
+      self.W_fc3, self.b_fc3,
+      self.W_policy, self.b_policy,
+      self.W_value, self.b_value
+    ]
+    vs = []
+    for v in var_list:
+      vs.extend(v.values())
+    return vs
+
+# Actor-Critic No Target Network
+class ActorCriticNoTargetNetwork(ActorCriticNetwork):
+  def __init__(self,
+               action_size,
+               device="/cpu:0",
+               network_scope="network",
+               scene_scopes=["scene"]):
+    ActorCriticNetwork.__init__(self, action_size, device)
+
+    self.pi = dict()
+    self.v = dict()
+
+    self.W_fc1 = dict()
+    self.b_fc1 = dict()
+
+    self.W_fc2 = dict()
+    self.b_fc2 = dict()
+
+    self.W_fc3 = dict()
+    self.b_fc3 = dict()
+
+    self.W_policy = dict()
+    self.b_policy = dict()
+
+    self.W_value = dict()
+    self.b_value = dict()
+
+    with tf.device(self._device):
+
+      # state (input)
+      self.s = tf.placeholder("float", [None, 2048, 4])
+
+      with tf.variable_scope(network_scope):
+        # network key
+        key = network_scope
+
+        # flatten input
+        self.s_flat = tf.reshape(self.s, [-1, 8192])
+
+        # shared siamese layer
+        self.W_fc1[key] = self._fc_weight_variable([8192, 512])
+        self.b_fc1[key] = self._fc_bias_variable([512], 8192)
+
+        h_s_flat = tf.nn.relu(tf.matmul(self.s_flat, self.W_fc1[key]) + self.b_fc1[key])
+        h_fc1 = h_s_flat
+        #h_fc1 = tf.concat(values=[h_s_flat, h_t_flat], axis=1)
+
+        # shared fusion layer
+        # self.W_fc2[key] = self._fc_weight_variable([512, 512])
+        # self.b_fc2[key] = self._fc_bias_variable([512], 1024)
+        # h_fc2 = tf.nn.relu(tf.matmul(h_fc1, self.W_fc2[key]) + self.b_fc2[key])
+        h_fc2 = h_fc1
+
+        for scene_scope in scene_scopes:
+          # scene-specific key
+          key = self._get_key([network_scope, scene_scope])
+
+          with tf.variable_scope(scene_scope):
+
+            # scene-specific adaptation layer
+            self.W_fc3[key] = self._fc_weight_variable([512, 512])
+            self.b_fc3[key] = self._fc_bias_variable([512], 512)
+            h_fc3 = tf.nn.relu(tf.matmul(h_fc2, self.W_fc3[key]) + self.b_fc3[key])
+
+            # weight for policy output layer
+            self.W_policy[key] = self._fc_weight_variable([512, action_size])
+            self.b_policy[key] = self._fc_bias_variable([action_size], 512)
+
+            # policy (output)
+            pi_ = tf.matmul(h_fc3, self.W_policy[key]) + self.b_policy[key]
+            self.pi[key] = tf.nn.softmax(pi_)
+
+            # weight for value output layer
+            self.W_value[key] = self._fc_weight_variable([512, 1])
+            self.b_value[key] = self._fc_bias_variable([1], 512)
+
+            # value (output)
+            v_ = tf.matmul(h_fc3, self.W_value[key]) + self.b_value[key]
+            self.v[key] = tf.reshape(v_, [-1])
+
+  def run_policy_and_value(self, sess, state, scopes):
+    k = self._get_key(scopes[:2])
+    pi_out, v_out = sess.run( [self.pi[k], self.v[k]], feed_dict = {self.s : [state]} )
+    return (pi_out[0], v_out[0])
+
+  def run_policy(self, sess, state, scopes):
+    k = self._get_key(scopes[:2])
+    pi_out = sess.run( self.pi[k], feed_dict = {self.s : [state]} )
+    return pi_out[0]
+
+  def run_value(self, sess, state, scopes):
+    k = self._get_key(scopes[:2])
+    v_out = sess.run( self.v[k], feed_dict = {self.s : [state]} )
     return v_out[0]
 
   def get_vars(self):
